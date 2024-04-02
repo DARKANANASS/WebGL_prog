@@ -88,7 +88,474 @@ Module['ready'] = new Promise(function(resolve, reject) {
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
+Module["MindARFace"] = {
+    this: this, 
+  
+    video: null,
+  
+    onStartARPtr: null,
 
+    onCameraConfigChangePtr: null,
+  
+    onUpdatePtr: null,
+
+    isRunning: false,
+
+    filterMinCF: 0.001, 
+
+    filterBeta: 10,
+
+    controller: null,
+
+    isFacingUser: true,
+    
+    memory: {},
+  
+    texPtr: null,
+  
+    invisibleMatrix: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+
+    SetFilterMinCF: function(filterMinCF) {
+      this.filterMinCF = filterMinCF;
+    },
+  
+    SetFilterBeta: function(filterBeta) {
+      this.filterBeta = filterBeta;
+    },
+
+    SetIsFacingUser: function(isFacingUser) {
+      this.isFacingUser = isFacingUser;
+    },
+  
+    GetExternalJS: function () {
+      return new Promise((resolve) => {
+        const SCRIPT_URL = "https://cdn.jsdelivr.net/npm/mind-ar@1.2.3/dist/mindar-face.prod.js";
+        // console.log("get external js...", SCRIPT_URL);
+  
+        let script = document.querySelector(`script[src="${SCRIPT_URL}"]`);
+        if (!script) {
+          script = document.createElement("script");
+          script.src = SCRIPT_URL;
+          script.type = "module";
+          script.async = true;
+          document.body.appendChild(script);
+  
+          script.addEventListener("load", () => {
+            // console.log("window mindar: ", window.MINDAR);
+            resolve();
+          });
+        } else {
+          resolve();
+        }
+      });
+    },
+  
+    TextureUpdate: function (tex) {
+      this.texPtr = tex;
+    },
+  
+    StartAR: async function () {
+      await this.GetExternalJS();
+      await this.StartVideo();
+      await this.StartMindAR();
+      this.isRunning = true;
+  
+      if (this.onStartARPtr) {
+        Module.dynCall_v(this.onStartARPtr);
+      }    
+    },
+
+    StopAR: function() {
+      if (!this.isRunning) return;
+  
+      this.controller.stopProcessVideo();
+  
+      const tracks = this.video.srcObject.getTracks();
+      tracks.forEach(function (track) {
+        track.stop();
+      });
+      this.video.remove();
+    },
+
+    IsRunning: function() {
+      return this.isRunning;
+    },
+  
+    StartVideo: function () {
+      //navigator.mediaDevices.getUserMedia({audio: false, video: {facingMode: FacingModes[this.facingMode]}})
+      return new Promise((resolve) => {
+        navigator.mediaDevices.getUserMedia({audio: false, video: {
+          facingMode: (this.isFacingUser ? 'user' : 'environment')
+        }})
+          .then(stream => {
+              this.video = document.createElement('video');
+              this.video.playsInline = true;
+              this.video.srcObject = stream;
+              this.video.addEventListener('loadedmetadata', () => {
+                  this.video.play();
+                  this.video.width = this.video.videoWidth;
+                  this.video.height = this.video.videoHeight;
+                  resolve();
+              });
+          });
+      });
+    },
+  
+    StartMindAR: async function() {
+      const input = this.video;
+  
+      const controller = new window.MINDAR.FACE.Controller({
+        filterMinCF: this.filterMinCF, // OneEuroFilter, min cutoff frequency
+        filterBeta: this.filterBeta, // OneEuroFilter, beta
+      })
+
+      const NUM_LANDMARKS = 468;
+        
+      controller.onUpdate = ({hasFace, estimateResult}) => {
+        if (hasFace) {
+            const {metricLandmarks, faceMatrix, faceScale} = estimateResult;
+
+            const faceMeshVertices = [];
+            for (let i = 0; i < NUM_LANDMARKS; i++) {
+              faceMeshVertices.push(metricLandmarks[i][0]);
+              faceMeshVertices.push(metricLandmarks[i][1]);
+              faceMeshVertices.push(metricLandmarks[i][2]);
+            }
+
+            // transpose
+            const faceM = [
+              faceMatrix[0], faceMatrix[4], faceMatrix[8], faceMatrix[12],
+              faceMatrix[1], faceMatrix[5], faceMatrix[9], faceMatrix[13],
+              faceMatrix[2], faceMatrix[6], faceMatrix[10], faceMatrix[14],
+              faceMatrix[3], faceMatrix[7], faceMatrix[11], faceMatrix[15],
+            ]
+
+            HEAPF32.set(faceM, this.memory.faceMeshMatrixPtr >> 2);
+            HEAPF32.set(faceMeshVertices, this.memory.faceMeshLVerticesPtr >> 2);
+        } else {
+            HEAPF32.set(this.invisibleMatrix, this.memory.faceMeshMatrixPtr >> 2);
+        }
+        if (this.onUpdatePtr) {
+            Module.dynCall_vi(this.onUpdatePtr, hasFace?1:0);
+        }
+      };
+
+      this.controller = controller;
+
+      const flipFace = this.isFacingUser;
+      await controller.setup(flipFace);
+
+      this.memory.cameraParamsPtr = _malloc(4 * 4);
+      this.memory.faceMeshMatrixPtr = _malloc(16 * 4);
+      this.memory.faceMeshLVerticesPtr = _malloc(NUM_LANDMARKS * 3 * 4);
+  
+      const drawWebcamTexture = () => {
+        if (this.video === null) return;      
+  
+        GLctx.bindTexture(GLctx.TEXTURE_2D, GL.textures[this.texPtr]);
+        GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, true);
+        // GLctx.texImage2D(GLctx.TEXTURE_2D, 0, GLctx.RGBA, GLctx.RGBA, GLctx.UNSIGNED_BYTE, this.video);
+        GLctx.texSubImage2D(GLctx.TEXTURE_2D, 0, 0, 0, GLctx.RGBA, GLctx.UNSIGNED_BYTE, this.video);
+        GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, false);
+  
+        window.requestAnimationFrame(drawWebcamTexture);
+      }
+      window.requestAnimationFrame(drawWebcamTexture);
+
+
+      const onResize = () => {
+        this.video.width = this.video.videoWidth;
+        this.video.height = this.video.videoHeight;
+
+        controller.onInputResized(this.video);
+        const {fov, aspect, near, far} = controller.getCameraParams();
+
+        //console.log("camera params: ", fov, aspect, near, far);
+        // console.log("this.memory.cameraParamsPtr: " + this.memory.cameraParamsPtr);
+        HEAPF32.set([fov, aspect, near, far], this.memory.cameraParamsPtr >> 2);
+
+        if (this.onCameraConfigChangePtr) {
+          Module.dynCall_v(this.onCameraConfigChangePtr);
+        }
+      }
+      window.addEventListener('resize', onResize);
+
+      onResize();
+
+      controller.processVideo(input);
+    },
+  
+    GetCameraParamsPtr() {
+      return this.memory.cameraParamsPtr;
+    },
+
+    GetFaceMeshMatrixPtr() {
+      return this.memory.faceMeshMatrixPtr;
+    },
+
+    GetFaceMeshVerticesPtr() {
+      return this.memory.faceMeshLVerticesPtr;
+    },
+  
+    GetVideoWidth: function () {
+      return this.video.width;
+    },
+  
+    GetVideoHeight: function () {
+      return this.video.height;
+    }
+  };
+Module["MindARImage"] = {
+  this: this, 
+
+  video: null,
+
+  controller: null,
+
+  isFacingUser: false,
+
+  onStartARPtr: null,
+
+  onCameraConfigChangePtr: null,
+
+  onUpdatePtr: null,
+
+  isRunning: false,
+
+  memory: {},
+
+  markerDimensions: null,
+
+  texPtr: null,
+
+  invisibleMatrix: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+
+  maxTrack: 1,
+
+  mindFilePath: null, 
+
+  filterMinCF: 0.001, 
+
+  filterBeta: 0.001,
+
+  missTolerance: 5, // number of miss before considered target lost. default is 5
+  
+  warmupTolerance: 5, // number of track before considered target found. default is 5
+
+  SetMindFilePath: function(mindFilePath) {
+    this.mindFilePath = mindFilePath;
+  },
+
+  SetMaxTrack: function(maxTrack) {
+    this.maxTrack = maxTrack;
+  },
+
+  SetFilterMinCF: function(filterMinCF) {
+    this.filterMinCF = filterMinCF;
+  },
+
+  SetFilterBeta: function(filterBeta) {
+    this.filterBeta = filterBeta;
+  },
+
+  SetIsFacingUser: function(isFacingUser) {
+    this.isFacingUser = isFacingUser;
+  },
+
+  GetExternalJS: function () {
+    return new Promise((resolve) => {
+      const SCRIPT_URL = "https://cdn.jsdelivr.net/npm/mind-ar@1.2.3/dist/mindar-image.prod.js";
+      // console.log("get external js...", SCRIPT_URL);
+
+      let script = document.querySelector(`script[src="${SCRIPT_URL}"]`);
+      if (!script) {
+        script = document.createElement("script");
+        script.src = SCRIPT_URL;
+        script.type = "module";
+        script.async = true;
+        document.body.appendChild(script);
+
+        script.addEventListener("load", () => {
+          // console.log("window mindar: ", window.MINDAR);
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
+  },
+
+  TextureUpdate: function (tex) {
+    this.texPtr = tex;
+  },
+
+  StartAR: async function () {
+    await this.GetExternalJS();
+    await this.StartVideo();
+    await this.StartMindAR();
+    this.isRunning = true;
+
+    if (this.onStartARPtr) {
+      Module.dynCall_v(this.onStartARPtr);
+    }    
+  },
+
+  StopAR: function() {
+    if (!this.isRunning) return;
+
+    this.controller.stopProcessVideo();
+
+    const tracks = this.video.srcObject.getTracks();
+    tracks.forEach(function (track) {
+      track.stop();
+    });
+    this.video.remove();
+  },
+
+  IsRunning: function() {
+    return this.isRunning;
+  },
+
+  StartVideo: function () {
+    //navigator.mediaDevices.getUserMedia({audio: false, video: {facingMode: FacingModes[this.facingMode]}})
+    return new Promise((resolve) => {
+      navigator.mediaDevices.getUserMedia({audio: false, video: {
+        facingMode: (this.isFacingUser ? 'user' : 'environment')
+      }})
+        .then(stream => {
+            this.video = document.createElement('video');
+            this.video.playsInline = true;
+            this.video.srcObject = stream;
+            this.video.addEventListener('loadedmetadata', () => {
+                this.video.play();
+                this.video.width = this.video.videoWidth;
+                this.video.height = this.video.videoHeight;
+                //this._setupAR(this.video);
+                resolve();
+            });
+        });
+    });
+  },
+
+  StartMindAR: async function() {
+    const input = this.video;
+
+    const controller = new window.MINDAR.IMAGE.Controller({
+      inputWidth: input.width,
+      inputHeight: input.height,
+      // maxTrack: this.maxTrack,
+      // filterMinCF: 0.001, // OneEuroFilter, min cutoff frequency. default is 0.001
+      // filterBeta: 0.001, // OneEuroFilter, beta. default is 1000
+      maxTrack: this.maxTrack,
+      filterMinCF: this.filterMinCF, // OneEuroFilter, min cutoff frequency. default is 0.001
+      filterBeta: this.filterBeta, // OneEuroFilter, beta. default is 1000
+      missTolerance: this.missTolerance, // number of miss before considered target lost. default is 5
+      warmupTolerance: this.warmupTolerance, // number of track before considered target found. default is 5
+
+      onUpdate: (data) => {
+        if (data.type === 'updateMatrix') {
+            const {targetIndex, worldMatrix} = data;
+
+            if (worldMatrix == null) {              
+              HEAPF32.set(this.invisibleMatrix, this.memory.targetMatrixPtrs[targetIndex] >> 2);
+            } else {
+              HEAPF32.set(worldMatrix, this.memory.targetMatrixPtrs[targetIndex] >> 2);
+            }   
+
+            if (this.onUpdatePtr) {
+              Module.dynCall_vii(this.onUpdatePtr, targetIndex, worldMatrix==null?0:1);
+            }
+        }
+      },
+    });
+
+    this.controller = controller;
+
+    // const controllerProjectionMatrix = controller.getProjectionMatrix();
+
+    // const far = controllerProjectionMatrix[14] / (controllerProjectionMatrix[10] + 1.0);
+    // const near = controllerProjectionMatrix[14] / (controllerProjectionMatrix[10] - 1.0);
+    // const fov = 2 * Math.atan(1 / controllerProjectionMatrix[5]) * 180 / Math.PI;
+    // const aspect = controllerProjectionMatrix[5] / controllerProjectionMatrix[0];
+
+    this.memory.cameraParamsPtr = _malloc(4 * 4);
+    // HEAPF32.set([fov, aspect, near, far], this.memory.cameraParamsPtr >> 2);
+
+    const {dimensions} = await controller.addImageTargets(this.mindFilePath);
+    this.markerDimensions = dimensions;
+
+    this.memory.targetMatrixPtrs = [];
+    for (let i = 0; i < dimensions.length; i++) {
+      this.memory.targetMatrixPtrs[i] = _malloc(16 * 4);
+    }
+
+    const drawWebcamTexture = () => {
+      if (this.video === null) return;      
+
+      GLctx.bindTexture(GLctx.TEXTURE_2D, GL.textures[this.texPtr]);
+      GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, true);
+      // GLctx.texImage2D(GLctx.TEXTURE_2D, 0, GLctx.RGBA, GLctx.RGBA, GLctx.UNSIGNED_BYTE, this.video);
+      GLctx.texSubImage2D(GLctx.TEXTURE_2D, 0, 0, 0, GLctx.RGBA, GLctx.UNSIGNED_BYTE, this.video);
+      GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, false);
+
+      window.requestAnimationFrame(drawWebcamTexture);
+    }
+    window.requestAnimationFrame(drawWebcamTexture);
+
+    const onResize = () => {
+      this.video.width = this.video.videoWidth;
+      this.video.height = this.video.videoHeight;
+
+      const controllerProjectionMatrix = controller.getProjectionMatrix();
+
+      // Handle when phone is rotated, video width and height are swapped
+      const fovAdjust = this.video.width / controller.inputWidth;
+
+      const far = controllerProjectionMatrix[14] / (controllerProjectionMatrix[10] + 1.0);
+      const near = controllerProjectionMatrix[14] / (controllerProjectionMatrix[10] - 1.0);
+      const fov = 2 * Math.atan(1 / controllerProjectionMatrix[5] / fovAdjust) * 180 / Math.PI;
+      const aspect = controllerProjectionMatrix[5] / controllerProjectionMatrix[0];
+      HEAPF32.set([fov, aspect, near, far], this.memory.cameraParamsPtr >> 2);
+
+      if (this.onCameraConfigChangePtr) {
+        Module.dynCall_v(this.onCameraConfigChangePtr);
+      }
+    }
+    window.addEventListener('resize', onResize);
+
+    onResize();
+
+    controller.processVideo(input);
+  },
+
+  GetCameraParamsPtr() {
+    return this.memory.cameraParamsPtr;
+  },
+
+  GetTargetWorldMatrixPtr(targetIndex) {
+    return this.memory.targetMatrixPtrs[targetIndex];
+  },
+
+  GetVideoWidth: function () {
+    return this.video.width;
+  },
+
+  GetVideoHeight: function () {
+    return this.video.height;
+  },
+
+  GetNumTargets: function() {
+    return this.markerDimensions.length;
+  },
+
+  GetNumTargetWidth: function(targetIndex) {
+    return this.markerDimensions[targetIndex][0];
+  },
+
+  GetNumTargetHeight: function(targetIndex) {
+    return this.markerDimensions[targetIndex][1];
+  }
+}
 
 
 // Emscripten 1.x had a function Pointer_stringify() to marshal C strings to JS strings. That has been obsoleted by the new UTF8/16/32ToString() API family.
@@ -1975,13 +2442,13 @@ var tempI64;
 // === Body ===
 
 var ASM_CONSTS = {
-  3877444: function() {Module['emscripten_get_now_backup'] = performance.now;},  
- 3877499: function($0) {performance.now = function() { return $0; };},  
- 3877547: function($0) {performance.now = function() { return $0; };},  
- 3877595: function() {performance.now = Module['emscripten_get_now_backup'];},  
- 3877650: function() {return Module.webglContextAttributes.premultipliedAlpha;},  
- 3877711: function() {return Module.webglContextAttributes.preserveDrawingBuffer;},  
- 3877775: function() {return Module.webglContextAttributes.powerPreference;}
+  3885220: function() {Module['emscripten_get_now_backup'] = performance.now;},  
+ 3885275: function($0) {performance.now = function() { return $0; };},  
+ 3885323: function($0) {performance.now = function() { return $0; };},  
+ 3885371: function() {performance.now = Module['emscripten_get_now_backup'];},  
+ 3885426: function() {return Module.webglContextAttributes.premultipliedAlpha;},  
+ 3885487: function() {return Module.webglContextAttributes.preserveDrawingBuffer;},  
+ 3885551: function() {return Module.webglContextAttributes.powerPreference;}
 };
 
 
@@ -4380,6 +4847,130 @@ var ASM_CONSTS = {
   function _JS_UnityEngineShouldQuit() {
   	return !!Module.shouldQuit;
   }
+
+  function _MindARFace_GetCameraParamsPtr() {
+        return Module.MindARFace.GetCameraParamsPtr();
+      }
+
+  function _MindARFace_GetFaceMeshMatrixPtr() {
+        return Module.MindARFace.GetFaceMeshMatrixPtr();
+      }
+
+  function _MindARFace_GetFaceMeshVerticesPtr() {
+        return Module.MindARFace.GetFaceMeshVerticesPtr();
+      }
+
+  function _MindARFace_GetVideoHeight() {
+        return Module.MindARFace.GetVideoHeight();
+      }
+
+  function _MindARFace_GetVideoWidth() {
+        return Module.MindARFace.GetVideoWidth();
+      }
+
+  function _MindARFace_IsRunning() {    
+        return Module.MindARFace.IsRunning();
+      }
+
+  function _MindARFace_SetCallbacks(onStartARPtr, onCameraConfigChangePtr, onUpdatePtr) {
+        Module.MindARFace.onStartARPtr = onStartARPtr;
+        Module.MindARFace.onCameraConfigChangePtr = onCameraConfigChangePtr;
+        Module.MindARFace.onUpdatePtr = onUpdatePtr;
+      }
+
+  function _MindARFace_SetFilterBeta(value) {
+        Module.MindARFace.SetFilterBeta(value);
+      }
+
+  function _MindARFace_SetFilterMinCF(value) {
+        Module.MindARFace.SetFilterMinCF(value);
+      }
+
+  function _MindARFace_SetIsFacingUser(value) {
+        Module.MindARFace.SetIsFacingUser(value);
+      }
+
+  function _MindARFace_StartAR() {
+        Module.MindARFace.StartAR();
+      }
+
+  function _MindARFace_StopAR() {    
+        Module.MindARFace.StopAR();
+      }
+
+  function _MindARFace_TextureUpdate(tex) {
+        Module.MindARFace.TextureUpdate(tex);
+      }
+
+  function _MindARImage_GetCameraParamsPtr() {
+      return Module.MindARImage.GetCameraParamsPtr();
+    }
+
+  function _MindARImage_GetNumTargets() {
+      return Module.MindARImage.GetNumTargets();
+    }
+
+  function _MindARImage_GetTargetHeight(targetIndex) {
+      return Module.MindARImage.GetNumTargetHeight(targetIndex);
+    }
+
+  function _MindARImage_GetTargetWidth(targetIndex) {
+      return Module.MindARImage.GetNumTargetWidth(targetIndex);
+    }
+
+  function _MindARImage_GetTargetWorldMatrixPtr(targetIndex) {
+      return Module.MindARImage.GetTargetWorldMatrixPtr(targetIndex);
+    }
+
+  function _MindARImage_GetVideoHeight() {
+      return Module.MindARImage.GetVideoHeight();
+    }
+
+  function _MindARImage_GetVideoWidth() {
+      return Module.MindARImage.GetVideoWidth();
+    }
+
+  function _MindARImage_IsRunning() {    
+      return Module.MindARImage.IsRunning();
+    }
+
+  function _MindARImage_SetCallbacks(onStartARPtr, onCameraConfigChangePtr, onUpdatePtr) {
+      Module.MindARImage.onStartARPtr = onStartARPtr;
+      Module.MindARImage.onCameraConfigChangePtr = onCameraConfigChangePtr;
+      Module.MindARImage.onUpdatePtr = onUpdatePtr;
+    }
+
+  function _MindARImage_SetFilterBeta(value) {
+      Module.MindARImage.SetFilterBeta(value);
+    }
+
+  function _MindARImage_SetFilterMinCF(value) {
+      Module.MindARImage.SetFilterMinCF(value);
+    }
+
+  function _MindARImage_SetIsFacingUser(value) {
+      Module.MindARImage.SetIsFacingUser(value);
+    }
+
+  function _MindARImage_SetMaxTrack(value) {
+      Module.MindARImage.SetMaxTrack(value);
+    }
+
+  function _MindARImage_SetMindFilePath(mindFilePath) {
+      Module.MindARImage.SetMindFilePath(UTF8ToString(mindFilePath));
+    }
+
+  function _MindARImage_StartAR() {    
+      Module.MindARImage.StartAR();
+    }
+
+  function _MindARImage_StopAR() {    
+      Module.MindARImage.StopAR();
+    }
+
+  function _MindARImage_TextureUpdate(tex) {
+      Module.MindARImage.TextureUpdate(tex);
+    }
 
   function ___assert_fail(condition, filename, line, func) {
       abort('Assertion failed: ' + UTF8ToString(condition) + ', at: ' + [filename ? UTF8ToString(filename) : 'unknown filename', line, func ? UTF8ToString(func) : 'unknown function']);
@@ -14938,6 +15529,36 @@ var asmLibraryArg = {
   "JS_SystemInfo_HasFullscreen": _JS_SystemInfo_HasFullscreen,
   "JS_SystemInfo_HasWebGL": _JS_SystemInfo_HasWebGL,
   "JS_UnityEngineShouldQuit": _JS_UnityEngineShouldQuit,
+  "MindARFace_GetCameraParamsPtr": _MindARFace_GetCameraParamsPtr,
+  "MindARFace_GetFaceMeshMatrixPtr": _MindARFace_GetFaceMeshMatrixPtr,
+  "MindARFace_GetFaceMeshVerticesPtr": _MindARFace_GetFaceMeshVerticesPtr,
+  "MindARFace_GetVideoHeight": _MindARFace_GetVideoHeight,
+  "MindARFace_GetVideoWidth": _MindARFace_GetVideoWidth,
+  "MindARFace_IsRunning": _MindARFace_IsRunning,
+  "MindARFace_SetCallbacks": _MindARFace_SetCallbacks,
+  "MindARFace_SetFilterBeta": _MindARFace_SetFilterBeta,
+  "MindARFace_SetFilterMinCF": _MindARFace_SetFilterMinCF,
+  "MindARFace_SetIsFacingUser": _MindARFace_SetIsFacingUser,
+  "MindARFace_StartAR": _MindARFace_StartAR,
+  "MindARFace_StopAR": _MindARFace_StopAR,
+  "MindARFace_TextureUpdate": _MindARFace_TextureUpdate,
+  "MindARImage_GetCameraParamsPtr": _MindARImage_GetCameraParamsPtr,
+  "MindARImage_GetNumTargets": _MindARImage_GetNumTargets,
+  "MindARImage_GetTargetHeight": _MindARImage_GetTargetHeight,
+  "MindARImage_GetTargetWidth": _MindARImage_GetTargetWidth,
+  "MindARImage_GetTargetWorldMatrixPtr": _MindARImage_GetTargetWorldMatrixPtr,
+  "MindARImage_GetVideoHeight": _MindARImage_GetVideoHeight,
+  "MindARImage_GetVideoWidth": _MindARImage_GetVideoWidth,
+  "MindARImage_IsRunning": _MindARImage_IsRunning,
+  "MindARImage_SetCallbacks": _MindARImage_SetCallbacks,
+  "MindARImage_SetFilterBeta": _MindARImage_SetFilterBeta,
+  "MindARImage_SetFilterMinCF": _MindARImage_SetFilterMinCF,
+  "MindARImage_SetIsFacingUser": _MindARImage_SetIsFacingUser,
+  "MindARImage_SetMaxTrack": _MindARImage_SetMaxTrack,
+  "MindARImage_SetMindFilePath": _MindARImage_SetMindFilePath,
+  "MindARImage_StartAR": _MindARImage_StartAR,
+  "MindARImage_StopAR": _MindARImage_StopAR,
+  "MindARImage_TextureUpdate": _MindARImage_TextureUpdate,
   "__assert_fail": ___assert_fail,
   "__cxa_allocate_exception": ___cxa_allocate_exception,
   "__cxa_begin_catch": ___cxa_begin_catch,
@@ -15455,22 +16076,16 @@ var dynCall_jii = Module["dynCall_jii"] = createExportWrapper("dynCall_jii");
 var dynCall_viiiiiiii = Module["dynCall_viiiiiiii"] = createExportWrapper("dynCall_viiiiiiii");
 
 /** @type {function(...*):?} */
-var dynCall_iiiijii = Module["dynCall_iiiijii"] = createExportWrapper("dynCall_iiiijii");
+var dynCall_vijii = Module["dynCall_vijii"] = createExportWrapper("dynCall_vijii");
 
 /** @type {function(...*):?} */
-var dynCall_viifi = Module["dynCall_viifi"] = createExportWrapper("dynCall_viifi");
-
-/** @type {function(...*):?} */
-var dynCall_viiji = Module["dynCall_viiji"] = createExportWrapper("dynCall_viiji");
-
-/** @type {function(...*):?} */
-var dynCall_iiijii = Module["dynCall_iiijii"] = createExportWrapper("dynCall_iiijii");
-
-/** @type {function(...*):?} */
-var dynCall_iiifii = Module["dynCall_iiifii"] = createExportWrapper("dynCall_iiifii");
+var dynCall_iijiii = Module["dynCall_iijiii"] = createExportWrapper("dynCall_iijiii");
 
 /** @type {function(...*):?} */
 var dynCall_iiiidii = Module["dynCall_iiiidii"] = createExportWrapper("dynCall_iiiidii");
+
+/** @type {function(...*):?} */
+var dynCall_iiiijii = Module["dynCall_iiiijii"] = createExportWrapper("dynCall_iiiijii");
 
 /** @type {function(...*):?} */
 var dynCall_vidi = Module["dynCall_vidi"] = createExportWrapper("dynCall_vidi");
@@ -15482,19 +16097,10 @@ var dynCall_viidi = Module["dynCall_viidi"] = createExportWrapper("dynCall_viidi
 var dynCall_viji = Module["dynCall_viji"] = createExportWrapper("dynCall_viji");
 
 /** @type {function(...*):?} */
-var dynCall_viiiiiiiiii = Module["dynCall_viiiiiiiiii"] = createExportWrapper("dynCall_viiiiiiiiii");
+var dynCall_viiji = Module["dynCall_viiji"] = createExportWrapper("dynCall_viiji");
 
 /** @type {function(...*):?} */
-var dynCall_iiiiiiiiiji = Module["dynCall_iiiiiiiiiji"] = createExportWrapper("dynCall_iiiiiiiiiji");
-
-/** @type {function(...*):?} */
-var dynCall_vji = Module["dynCall_vji"] = createExportWrapper("dynCall_vji");
-
-/** @type {function(...*):?} */
-var dynCall_vijii = Module["dynCall_vijii"] = createExportWrapper("dynCall_vijii");
-
-/** @type {function(...*):?} */
-var dynCall_iijiii = Module["dynCall_iijiii"] = createExportWrapper("dynCall_iijiii");
+var dynCall_iiiiiiiiii = Module["dynCall_iiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiii");
 
 /** @type {function(...*):?} */
 var dynCall_viiiiiii = Module["dynCall_viiiiiii"] = createExportWrapper("dynCall_viiiiiii");
@@ -15506,7 +16112,19 @@ var dynCall_viiffi = Module["dynCall_viiffi"] = createExportWrapper("dynCall_vii
 var dynCall_iiiifii = Module["dynCall_iiiifii"] = createExportWrapper("dynCall_iiiifii");
 
 /** @type {function(...*):?} */
+var dynCall_iiifii = Module["dynCall_iiifii"] = createExportWrapper("dynCall_iiifii");
+
+/** @type {function(...*):?} */
 var dynCall_viiiifii = Module["dynCall_viiiifii"] = createExportWrapper("dynCall_viiiifii");
+
+/** @type {function(...*):?} */
+var dynCall_viiiiiiiiii = Module["dynCall_viiiiiiiiii"] = createExportWrapper("dynCall_viiiiiiiiii");
+
+/** @type {function(...*):?} */
+var dynCall_iiiiiiiiiji = Module["dynCall_iiiiiiiiiji"] = createExportWrapper("dynCall_iiiiiiiiiji");
+
+/** @type {function(...*):?} */
+var dynCall_vji = Module["dynCall_vji"] = createExportWrapper("dynCall_vji");
 
 /** @type {function(...*):?} */
 var dynCall_viiiidi = Module["dynCall_viiiidi"] = createExportWrapper("dynCall_viiiidi");
@@ -15527,19 +16145,19 @@ var dynCall_dii = Module["dynCall_dii"] = createExportWrapper("dynCall_dii");
 var dynCall_ji = Module["dynCall_ji"] = createExportWrapper("dynCall_ji");
 
 /** @type {function(...*):?} */
-var dynCall_iiiiiiiiii = Module["dynCall_iiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiii");
+var dynCall_viifi = Module["dynCall_viifi"] = createExportWrapper("dynCall_viifi");
 
 /** @type {function(...*):?} */
 var dynCall_fii = Module["dynCall_fii"] = createExportWrapper("dynCall_fii");
 
 /** @type {function(...*):?} */
-var dynCall_iiiiiiiiiiii = Module["dynCall_iiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiii");
+var dynCall_di = Module["dynCall_di"] = createExportWrapper("dynCall_di");
+
+/** @type {function(...*):?} */
+var dynCall_vifi = Module["dynCall_vifi"] = createExportWrapper("dynCall_vifi");
 
 /** @type {function(...*):?} */
 var dynCall_iifi = Module["dynCall_iifi"] = createExportWrapper("dynCall_iifi");
-
-/** @type {function(...*):?} */
-var dynCall_vifii = Module["dynCall_vifii"] = createExportWrapper("dynCall_vifii");
 
 /** @type {function(...*):?} */
 var dynCall_viiifii = Module["dynCall_viiifii"] = createExportWrapper("dynCall_viiifii");
@@ -15548,7 +16166,10 @@ var dynCall_viiifii = Module["dynCall_viiifii"] = createExportWrapper("dynCall_v
 var dynCall_viifiii = Module["dynCall_viifiii"] = createExportWrapper("dynCall_viifiii");
 
 /** @type {function(...*):?} */
-var dynCall_vifi = Module["dynCall_vifi"] = createExportWrapper("dynCall_vifi");
+var dynCall_iiijii = Module["dynCall_iiijii"] = createExportWrapper("dynCall_iiijii");
+
+/** @type {function(...*):?} */
+var dynCall_vifii = Module["dynCall_vifii"] = createExportWrapper("dynCall_vifii");
 
 /** @type {function(...*):?} */
 var dynCall_viidiji = Module["dynCall_viidiji"] = createExportWrapper("dynCall_viidiji");
@@ -15602,7 +16223,7 @@ var dynCall_iiffi = Module["dynCall_iiffi"] = createExportWrapper("dynCall_iiffi
 var dynCall_iiidii = Module["dynCall_iiidii"] = createExportWrapper("dynCall_iiidii");
 
 /** @type {function(...*):?} */
-var dynCall_di = Module["dynCall_di"] = createExportWrapper("dynCall_di");
+var dynCall_iiiiiiiiiiii = Module["dynCall_iiiiiiiiiiii"] = createExportWrapper("dynCall_iiiiiiiiiiii");
 
 /** @type {function(...*):?} */
 var dynCall_iidi = Module["dynCall_iidi"] = createExportWrapper("dynCall_iidi");
@@ -15611,34 +16232,16 @@ var dynCall_iidi = Module["dynCall_iidi"] = createExportWrapper("dynCall_iidi");
 var dynCall_iiji = Module["dynCall_iiji"] = createExportWrapper("dynCall_iiji");
 
 /** @type {function(...*):?} */
-var dynCall_viijii = Module["dynCall_viijii"] = createExportWrapper("dynCall_viijii");
-
-/** @type {function(...*):?} */
-var dynCall_jiii = Module["dynCall_jiii"] = createExportWrapper("dynCall_jiii");
-
-/** @type {function(...*):?} */
-var dynCall_viiiji = Module["dynCall_viiiji"] = createExportWrapper("dynCall_viiiji");
-
-/** @type {function(...*):?} */
 var dynCall_fiiffi = Module["dynCall_fiiffi"] = createExportWrapper("dynCall_fiiffi");
 
 /** @type {function(...*):?} */
 var dynCall_viiififii = Module["dynCall_viiififii"] = createExportWrapper("dynCall_viiififii");
 
 /** @type {function(...*):?} */
-var dynCall_ddiii = Module["dynCall_ddiii"] = createExportWrapper("dynCall_ddiii");
+var dynCall_viiiji = Module["dynCall_viiiji"] = createExportWrapper("dynCall_viiiji");
 
 /** @type {function(...*):?} */
 var dynCall_jijii = Module["dynCall_jijii"] = createExportWrapper("dynCall_jijii");
-
-/** @type {function(...*):?} */
-var dynCall_iiddi = Module["dynCall_iiddi"] = createExportWrapper("dynCall_iiddi");
-
-/** @type {function(...*):?} */
-var dynCall_iijji = Module["dynCall_iijji"] = createExportWrapper("dynCall_iijji");
-
-/** @type {function(...*):?} */
-var dynCall_ijji = Module["dynCall_ijji"] = createExportWrapper("dynCall_ijji");
 
 /** @type {function(...*):?} */
 var dynCall_iji = Module["dynCall_iji"] = createExportWrapper("dynCall_iji");
@@ -15648,6 +16251,21 @@ var dynCall_jjji = Module["dynCall_jjji"] = createExportWrapper("dynCall_jjji");
 
 /** @type {function(...*):?} */
 var dynCall_jiiiii = Module["dynCall_jiiiii"] = createExportWrapper("dynCall_jiiiii");
+
+/** @type {function(...*):?} */
+var dynCall_viijii = Module["dynCall_viijii"] = createExportWrapper("dynCall_viijii");
+
+/** @type {function(...*):?} */
+var dynCall_jiii = Module["dynCall_jiii"] = createExportWrapper("dynCall_jiii");
+
+/** @type {function(...*):?} */
+var dynCall_iiddi = Module["dynCall_iiddi"] = createExportWrapper("dynCall_iiddi");
+
+/** @type {function(...*):?} */
+var dynCall_iijji = Module["dynCall_iijji"] = createExportWrapper("dynCall_iijji");
+
+/** @type {function(...*):?} */
+var dynCall_ijji = Module["dynCall_ijji"] = createExportWrapper("dynCall_ijji");
 
 /** @type {function(...*):?} */
 var dynCall_j = Module["dynCall_j"] = createExportWrapper("dynCall_j");
@@ -15663,6 +16281,15 @@ var dynCall_vjiiiii = Module["dynCall_vjiiiii"] = createExportWrapper("dynCall_v
 
 /** @type {function(...*):?} */
 var dynCall_viiiiiiiii = Module["dynCall_viiiiiiiii"] = createExportWrapper("dynCall_viiiiiiiii");
+
+/** @type {function(...*):?} */
+var dynCall_ddiii = Module["dynCall_ddiii"] = createExportWrapper("dynCall_ddiii");
+
+/** @type {function(...*):?} */
+var dynCall_vfi = Module["dynCall_vfi"] = createExportWrapper("dynCall_vfi");
+
+/** @type {function(...*):?} */
+var dynCall_viiifffii = Module["dynCall_viiifffii"] = createExportWrapper("dynCall_viiifffii");
 
 /** @type {function(...*):?} */
 var dynCall_viiiiifi = Module["dynCall_viiiiifi"] = createExportWrapper("dynCall_viiiiifi");
@@ -15846,9 +16473,6 @@ var dynCall_viiiiiffii = Module["dynCall_viiiiiffii"] = createExportWrapper("dyn
 
 /** @type {function(...*):?} */
 var dynCall_viffffii = Module["dynCall_viffffii"] = createExportWrapper("dynCall_viffffii");
-
-/** @type {function(...*):?} */
-var dynCall_vfi = Module["dynCall_vfi"] = createExportWrapper("dynCall_vfi");
 
 /** @type {function(...*):?} */
 var dynCall_viiifiii = Module["dynCall_viiifiii"] = createExportWrapper("dynCall_viiifiii");
@@ -16750,17 +17374,6 @@ function invoke_viiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8) {
   }
 }
 
-function invoke_ddiii(index,a1,a2,a3,a4) {
-  var sp = stackSave();
-  try {
-    return dynCall_ddiii(index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
 function invoke_vidi(index,a1,a2,a3) {
   var sp = stackSave();
   try {
@@ -16783,21 +17396,10 @@ function invoke_vifi(index,a1,a2,a3) {
   }
 }
 
-function invoke_viifi(index,a1,a2,a3,a4) {
+function invoke_iiiidii(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
-    dynCall_viifi(index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiifii(index,a1,a2,a3,a4,a5) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiifii(index,a1,a2,a3,a4,a5);
+    return dynCall_iiiidii(index,a1,a2,a3,a4,a5,a6);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -16809,17 +17411,6 @@ function invoke_viffi(index,a1,a2,a3,a4) {
   var sp = stackSave();
   try {
     dynCall_viffi(index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiiidii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiiidii(index,a1,a2,a3,a4,a5,a6);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -16904,6 +17495,17 @@ function invoke_iiiiiiidii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9) {
   }
 }
 
+function invoke_viifi(index,a1,a2,a3,a4) {
+  var sp = stackSave();
+  try {
+    dynCall_viifi(index,a1,a2,a3,a4);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
 function invoke_fii(index,a1,a2) {
   var sp = stackSave();
   try {
@@ -16915,10 +17517,10 @@ function invoke_fii(index,a1,a2) {
   }
 }
 
-function invoke_iifi(index,a1,a2,a3) {
+function invoke_fiiii(index,a1,a2,a3,a4) {
   var sp = stackSave();
   try {
-    return dynCall_iifi(index,a1,a2,a3);
+    return dynCall_fiiii(index,a1,a2,a3,a4);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -16926,10 +17528,32 @@ function invoke_iifi(index,a1,a2,a3) {
   }
 }
 
-function invoke_vifii(index,a1,a2,a3,a4) {
+function invoke_di(index,a1) {
   var sp = stackSave();
   try {
-    dynCall_vifii(index,a1,a2,a3,a4);
+    return dynCall_di(index,a1);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiifii(index,a1,a2,a3,a4,a5) {
+  var sp = stackSave();
+  try {
+    return dynCall_iiifii(index,a1,a2,a3,a4,a5);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iifi(index,a1,a2,a3) {
+  var sp = stackSave();
+  try {
+    return dynCall_iifi(index,a1,a2,a3);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -16952,6 +17576,17 @@ function invoke_viifiii(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
     dynCall_viifiii(index,a1,a2,a3,a4,a5,a6);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_vifii(index,a1,a2,a3,a4) {
+  var sp = stackSave();
+  try {
+    dynCall_vifii(index,a1,a2,a3,a4);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17014,21 +17649,10 @@ function invoke_viiiifi(index,a1,a2,a3,a4,a5,a6) {
   }
 }
 
-function invoke_fiiii(index,a1,a2,a3,a4) {
+function invoke_iiiifii(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
-    return dynCall_fiiii(index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_di(index,a1) {
-  var sp = stackSave();
-  try {
-    return dynCall_di(index,a1);
+    return dynCall_iiiifii(index,a1,a2,a3,a4,a5,a6);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17047,10 +17671,10 @@ function invoke_viiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9) {
   }
 }
 
-function invoke_iiiifii(index,a1,a2,a3,a4,a5,a6) {
+function invoke_ddiii(index,a1,a2,a3,a4) {
   var sp = stackSave();
   try {
-    return dynCall_iiiifii(index,a1,a2,a3,a4,a5,a6);
+    return dynCall_ddiii(index,a1,a2,a3,a4);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17179,10 +17803,10 @@ function invoke_viji(index,a1,a2,a3,a4) {
   }
 }
 
-function invoke_iiiijii(index,a1,a2,a3,a4,a5,a6,a7) {
+function invoke_jiii(index,a1,a2,a3) {
   var sp = stackSave();
   try {
-    return dynCall_iiiijii(index,a1,a2,a3,a4,a5,a6,a7);
+    return dynCall_jiii(index,a1,a2,a3);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17190,21 +17814,10 @@ function invoke_iiiijii(index,a1,a2,a3,a4,a5,a6,a7) {
   }
 }
 
-function invoke_viiji(index,a1,a2,a3,a4,a5) {
+function invoke_jiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10) {
   var sp = stackSave();
   try {
-    dynCall_viiji(index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiijii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiijii(index,a1,a2,a3,a4,a5,a6);
+    return dynCall_jiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17227,6 +17840,28 @@ function invoke_iijiii(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
     return dynCall_iijiii(index,a1,a2,a3,a4,a5,a6);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiijii(index,a1,a2,a3,a4,a5,a6,a7) {
+  var sp = stackSave();
+  try {
+    return dynCall_iiiijii(index,a1,a2,a3,a4,a5,a6,a7);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiji(index,a1,a2,a3,a4,a5) {
+  var sp = stackSave();
+  try {
+    dynCall_viiji(index,a1,a2,a3,a4,a5);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17267,10 +17902,10 @@ function invoke_viidiji(index,a1,a2,a3,a4,a5,a6,a7) {
   }
 }
 
-function invoke_jiii(index,a1,a2,a3) {
+function invoke_ij(index,a1,a2) {
   var sp = stackSave();
   try {
-    return dynCall_jiii(index,a1,a2,a3);
+    return dynCall_ij(index,a1,a2);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17278,10 +17913,10 @@ function invoke_jiii(index,a1,a2,a3) {
   }
 }
 
-function invoke_ij(index,a1,a2) {
+function invoke_iiijii(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
-    return dynCall_ij(index,a1,a2);
+    return dynCall_iiijii(index,a1,a2,a3,a4,a5,a6);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17311,10 +17946,10 @@ function invoke_ijii(index,a1,a2,a3,a4) {
   }
 }
 
-function invoke_iiji(index,a1,a2,a3,a4) {
+function invoke_jiiiii(index,a1,a2,a3,a4,a5) {
   var sp = stackSave();
   try {
-    return dynCall_iiji(index,a1,a2,a3,a4);
+    return dynCall_jiiiii(index,a1,a2,a3,a4,a5);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17322,10 +17957,10 @@ function invoke_iiji(index,a1,a2,a3,a4) {
   }
 }
 
-function invoke_jiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10) {
+function invoke_iiji(index,a1,a2,a3,a4) {
   var sp = stackSave();
   try {
-    return dynCall_jiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
+    return dynCall_iiji(index,a1,a2,a3,a4);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
@@ -17359,17 +17994,6 @@ function invoke_iijji(index,a1,a2,a3,a4,a5,a6) {
   var sp = stackSave();
   try {
     return dynCall_iijji(index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_jiiiii(index,a1,a2,a3,a4,a5) {
-  var sp = stackSave();
-  try {
-    return dynCall_jiiiii(index,a1,a2,a3,a4,a5);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
