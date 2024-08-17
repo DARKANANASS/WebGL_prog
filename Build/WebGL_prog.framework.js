@@ -40,6 +40,7 @@ setTimeout(function () {
         this.frameNumber = 0;
         this.touchIDs = [];
         this.touches = [];
+        this.eventsNamesToIDs = {};
         this.CreateTouch = function (pageElement, xPercentage, yPercentage) {
           var touchID = 0;
           while (this.touchIDs.includes(touchID))
@@ -60,9 +61,9 @@ setTimeout(function () {
             return item !== touch
           });
         }
-        this.SendTouchEvent = function(JSEventsObject, eventID, eventName, target, changedTouches) {
+        this.SendTouchEvent = function(JSEventsObject, eventName, target, changedTouches) {
           var touchEvent = new XRTouchEvent(eventName, target, this.touches, this.touches, changedTouches);
-          JSEventsObject.eventHandlers[eventID].eventListenerFunc(touchEvent);
+          JSEventsObject.eventHandlers[this.eventsNamesToIDs[eventName]].eventListenerFunc(touchEvent);
         }
       }
       
@@ -111,15 +112,21 @@ setTimeout(function () {
           this.rotationZIndex = index++;
           this.rotationWIndex = index++;
           this.triggerIndex = index++;
+          this.triggerTouchedIndex = index++;
           this.squeezeIndex = index++;
+          this.squeezeTouchedIndex = index++;
           this.thumbstickIndex = index++;
+          this.thumbstickTouchedIndex = index++;
           this.thumbstickXIndex = index++;
           this.thumbstickYIndex = index++;
           this.touchpadIndex = index++;
+          this.touchpadTouchedIndex = index++;
           this.touchpadXIndex = index++;
           this.touchpadYIndex = index++;
           this.buttonAIndex = index++;
+          this.buttonATouchedIndex = index++;
           this.buttonBIndex = index++;
+          this.buttonBTouchedIndex = index++;
           this.updatedGripIndex = index++;
           this.gripPositionXIndex = index++;
           this.gripPositionYIndex = index++;
@@ -137,6 +144,13 @@ setTimeout(function () {
         this.handIndex = 0;
         this.triggerIndex = 0;
         this.squeezeIndex = 0;
+        this.pointerPositionXIndex = 0;
+        this.pointerPositionYIndex = 0;
+        this.pointerPositionZIndex = 0;
+        this.pointerRotationXIndex = 0;
+        this.pointerRotationYIndex = 0;
+        this.pointerRotationZIndex = 0;
+        this.pointerRotationWIndex = 0;
         this.jointsStartIndex = 0;
         this.poses = new Float32Array(16 * 25);
         this.radii = new Float32Array(25);
@@ -152,6 +166,13 @@ setTimeout(function () {
           this.handIndex = index++;
           this.triggerIndex = index++;
           this.squeezeIndex = index++;
+          this.pointerPositionXIndex = index++;
+          this.pointerPositionYIndex = index++;
+          this.pointerPositionZIndex = index++;
+          this.pointerRotationXIndex = index++;
+          this.pointerRotationYIndex = index++;
+          this.pointerRotationZIndex = index++;
+          this.pointerRotationWIndex = index++;
           this.jointsStartIndex = index;
         }
       }
@@ -309,7 +330,9 @@ setTimeout(function () {
     
       XRManager.prototype.onRequestARSession = function () {
         if (!this.isARSupported) return;
-        this.BrowserObject.pauseAsyncCallbacks();
+        if (this.BrowserObject.pauseAsyncCallbacks) {
+          this.BrowserObject.pauseAsyncCallbacks();
+        }
         this.BrowserObject.mainLoop.pause();
         var thisXRMananger = this;
         var tempRender = function () {
@@ -327,14 +350,18 @@ setTimeout(function () {
           thisXRMananger.xrSession = session;
           thisXRMananger.onSessionStarted(session);
         }).catch(function (error) {
-          thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          if (thisXRMananger.BrowserObject.resumeAsyncCallbacks) {
+            thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          }
           thisXRMananger.BrowserObject.mainLoop.resume();
         });
       }
     
       XRManager.prototype.onRequestVRSession = function () {
         if (!this.isVRSupported) return;
-        this.BrowserObject.pauseAsyncCallbacks();
+        if (this.BrowserObject.pauseAsyncCallbacks) {
+          this.BrowserObject.pauseAsyncCallbacks();
+        }
         this.BrowserObject.mainLoop.pause();
         var thisXRMananger = this;
         var tempRender = function () {
@@ -352,7 +379,9 @@ setTimeout(function () {
           thisXRMananger.xrSession = session;
           thisXRMananger.onSessionStarted(session);
         }).catch(function (error) {
-          thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          if (thisXRMananger.BrowserObject.resumeAsyncCallbacks) {
+            thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          }
           thisXRMananger.BrowserObject.mainLoop.resume();
         });
       }
@@ -397,16 +426,21 @@ setTimeout(function () {
 
         this.gameModule.WebXR.OnEndXR();
         this.didNotifyUnity = false;
-        this.canvas.width = this.canvas.parentElement.clientWidth * this.gameModule.asmLibraryArg._JS_SystemInfo_GetPreferredDevicePixelRatio();
-        this.canvas.height = this.canvas.parentElement.clientHeight * this.gameModule.asmLibraryArg._JS_SystemInfo_GetPreferredDevicePixelRatio();
-        
-        this.BrowserObject.pauseAsyncCallbacks();
+        var pixelRatio = Module.devicePixelRatio || window.devicePixelRatio || 1;
+        this.canvas.width = this.canvas.parentElement.clientWidth * pixelRatio;
+        this.canvas.height = this.canvas.parentElement.clientHeight * pixelRatio;
+
+        if (this.BrowserObject.pauseAsyncCallbacks) {
+          this.BrowserObject.pauseAsyncCallbacks();
+        }
         this.BrowserObject.mainLoop.pause();
         this.ctx.dontClearAlphaOnly = false;
         this.ctx.bindFramebuffer(this.ctx.FRAMEBUFFER);
         var thisXRMananger = this;
         window.setTimeout(function () {
-          thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          if (thisXRMananger.BrowserObject.resumeAsyncCallbacks) {
+            thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+          }
           thisXRMananger.BrowserObject.mainLoop.resume();
         });
       }
@@ -416,7 +450,7 @@ setTimeout(function () {
         {
           var touch = this.xrData.touches[0];
           this.xrData.RemoveTouch(touch);
-          this.xrData.SendTouchEvent(this.JSEventsObject, 8, "touchend", this.canvas, [touch]);
+          this.xrData.SendTouchEvent(this.JSEventsObject, "touchend", this.canvas, [touch]);
         }
       }
       
@@ -481,11 +515,11 @@ setTimeout(function () {
                 break;
               case "selectstart": // 7 touchstart
                 inputSource.xrTouchObject = this.xrData.CreateTouch(this.canvas, xPercentage, yPercentage);
-                this.xrData.SendTouchEvent(this.JSEventsObject, 7, "touchstart", this.canvas, [inputSource.xrTouchObject])
+                this.xrData.SendTouchEvent(this.JSEventsObject, "touchstart", this.canvas, [inputSource.xrTouchObject])
                 break;
               case "selectend": // 8 touchend
                 this.xrData.RemoveTouch(inputSource.xrTouchObject);
-                this.xrData.SendTouchEvent(this.JSEventsObject, 8, "touchend", this.canvas, [inputSource.xrTouchObject]);
+                this.xrData.SendTouchEvent(this.JSEventsObject, "touchend", this.canvas, [inputSource.xrTouchObject]);
                 inputSource.xrTouchObject = null;
                 break;
             }
@@ -557,7 +591,7 @@ setTimeout(function () {
             controller = this.xrData.controllerB;
             break;
         }
-        if (controller && controller.enabled == 1 && controller.gamepad && controller.gamepad.hapticActuators && controller.gamepad.hapticActuators.length > 0)
+        if (controller && Module.HEAPF32[controller.enabledIndex] == 1 && controller.gamepad && controller.gamepad.hapticActuators && controller.gamepad.hapticActuators.length > 0)
         {
           controller.gamepad.hapticActuators[0].pulse(hapticPulseAction.detail.intensity, hapticPulseAction.detail.duration);
         }
@@ -571,6 +605,9 @@ setTimeout(function () {
     
           var thisXRMananger = this;
           this.JSEventsObject = this.gameModule.WebXR.GetJSEventsObject();
+          for (var i = 0; i < this.JSEventsObject.eventHandlers.length; i++) {
+            this.xrData.eventsNamesToIDs[this.JSEventsObject.eventHandlers[i].eventTypeString] = i;
+          }
           this.BrowserObject = this.gameModule.WebXR.GetBrowserObject();
           this.BrowserObject.requestAnimationFrame = function (func) {
             if (thisXRMananger.xrSession && thisXRMananger.xrSession.isInSession) {
@@ -582,11 +619,16 @@ setTimeout(function () {
               window.requestAnimationFrame(func);
             }
           };
-    
+
+          Module.WebXR.startRenderSpectatorCamera = function () {
+            Module.WebXR.isSpectatorCameraRendering = true;
+            thisXRMananger.ctx.bindFramebuffer(thisXRMananger.ctx.FRAMEBUFFER);
+          }
+
           // bindFramebuffer frameBufferObject null in XRSession should use XRWebGLLayer FBO instead
           thisXRMananger.ctx.oldBindFramebuffer = thisXRMananger.ctx.bindFramebuffer;
           thisXRMananger.ctx.bindFramebuffer = function (target, fbo) {
-            if (!fbo) {
+            if (!fbo && !Module.WebXR.isSpectatorCameraRendering) {
               if (thisXRMananger.xrSession && thisXRMananger.xrSession.isInSession) {
                 if (thisXRMananger.xrSession.renderState.baseLayer) {
                   fbo = thisXRMananger.xrSession.renderState.baseLayer.framebuffer
@@ -692,6 +734,19 @@ setTimeout(function () {
                 xrHand.bufferJointIndex++;
               }
             }
+            // Get pointer pose for hand
+            var inputRayPose = frame.getPose(inputSource.targetRaySpace, refSpace);
+            if (inputRayPose) {
+              var position = inputRayPose.transform.position;
+              var orientation = inputRayPose.transform.orientation;
+              Module.HEAPF32[xrHand.pointerPositionXIndex] = position.x; // XRHandData.pointerPositionX
+              Module.HEAPF32[xrHand.pointerPositionYIndex] = position.y; // XRHandData.pointerPositionY
+              Module.HEAPF32[xrHand.pointerPositionZIndex] = -position.z; // XRHandData.pointerPositionZ
+              Module.HEAPF32[xrHand.pointerRotationXIndex] = -orientation.x; // XRHandData.pointerRotationX
+              Module.HEAPF32[xrHand.pointerRotationYIndex] = -orientation.y; // XRHandData.pointerRotationY
+              Module.HEAPF32[xrHand.pointerRotationZIndex] = orientation.z; // XRHandData.pointerRotationZ
+              Module.HEAPF32[xrHand.pointerRotationWIndex] = orientation.w; // XRHandData.pointerRotationW
+            }
           } else if (inputSource.gripSpace) {
             var inputRayPose = frame.getPose(inputSource.targetRaySpace, refSpace);
             if (inputRayPose) {
@@ -709,7 +764,7 @@ setTimeout(function () {
               Module.HEAPF32[controller.enabledIndex] = 1; // XRControllerData.enabled
               Module.HEAPF32[controller.handIndex] = hand; // XRControllerData.hand
 
-              if (controller.updatedProfiles == 0) {
+              if (controller.updatedProfiles == 0 && inputSource.profiles.length > 0) {
                 controller.profiles = inputSource.profiles;
                 controller.updatedProfiles = 1;
               }
@@ -723,7 +778,7 @@ setTimeout(function () {
               Module.HEAPF32[controller.rotationZIndex] = orientation.z; // XRControllerData.rotationZ
               Module.HEAPF32[controller.rotationWIndex] = orientation.w; // XRControllerData.rotationW
 
-              if (Module.HEAPF32[controller.updatedGripIndex] == 0 && inputSource.gripSpace) { // XRControllerData.updatedGrip
+              if (inputSource.gripSpace) {
                 var inputPose = frame.getPose(inputSource.gripSpace, refSpace);
                 if (inputPose) {
                   var gripPosition = inputPose.transform.position;
@@ -748,21 +803,27 @@ setTimeout(function () {
                   switch (j) {
                     case 0:
                       Module.HEAPF32[controller.triggerIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.trigger
+                      Module.HEAPF32[controller.triggerTouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.triggerTouched
                       break;
                     case 1:
                       Module.HEAPF32[controller.squeezeIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.squeeze
+                      Module.HEAPF32[controller.squeezeTouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.squeezeTouched
                       break;
                     case 2:
                       Module.HEAPF32[controller.touchpadIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.touchpad
+                      Module.HEAPF32[controller.touchpadTouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.touchpadTouched
                       break;
                     case 3:
                       Module.HEAPF32[controller.thumbstickIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.thumbstick
+                      Module.HEAPF32[controller.thumbstickTouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.thumbstickTouched
                       break;
                     case 4:
                       Module.HEAPF32[controller.buttonAIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.buttonA
+                      Module.HEAPF32[controller.buttonATouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.buttonATouched
                       break;
                     case 5:
                       Module.HEAPF32[controller.buttonBIndex] = inputSource.gamepad.buttons[j].value; // XRControllerData.buttonB
+                      Module.HEAPF32[controller.buttonBTouchedIndex] = inputSource.gamepad.buttons[j].touched; // XRControllerData.buttonBTouched
                       break;
                   }
                 }
@@ -808,7 +869,7 @@ setTimeout(function () {
           }
         }
         if (touchesToSend.length > 0) {
-          this.xrData.SendTouchEvent(this.JSEventsObject, 9, "touchmove", this.canvas, touchesToSend);
+          this.xrData.SendTouchEvent(this.JSEventsObject, "touchmove", this.canvas, touchesToSend);
           for (var i = 0; i < touchesToSend.length; i++) {
             touchesToSend[i].ResetMovement();
           }
@@ -816,14 +877,28 @@ setTimeout(function () {
       }
     
       XRManager.prototype.onSessionStarted = function (session) {
-        var glLayer = new XRWebGLLayer(session, this.ctx);
+        var webXRSettings = this.gameModule.WebXR.Settings;
+        var glLayerOptions = {
+          alpha: true,
+          antialias: true,
+          depth: true,
+          stencil: true
+        };
+        if (webXRSettings.UseFramebufferScaleFactor) {
+          var scaleFactor = webXRSettings.FramebufferScaleFactor;
+          if (webXRSettings.UseNativeResolution && XRWebGLLayer.getNativeFramebufferScaleFactor) {
+            scaleFactor = XRWebGLLayer.getNativeFramebufferScaleFactor(session);
+          }
+          glLayerOptions.framebufferScaleFactor = scaleFactor;
+        }
+        var glLayer = new XRWebGLLayer(session, this.ctx, glLayerOptions);
         session.updateRenderState({ baseLayer: glLayer });
         
         var refSpaceType = 'viewer';
         if (session.isImmersive) {
-          refSpaceType = this.gameModule.WebXR.Settings.VRRequiredReferenceSpace[0];
+          refSpaceType = webXRSettings.VRRequiredReferenceSpace[0];
           if (session.isAR) {
-            refSpaceType = this.gameModule.WebXR.Settings.ARRequiredReferenceSpace[0];
+            refSpaceType = webXRSettings.ARRequiredReferenceSpace[0];
             this.ctx.dontClearAlphaOnly = true;
           }
     
@@ -842,9 +917,9 @@ setTimeout(function () {
           session.addEventListener('visibilitychange', this.onSessionVisibilityEvent);
     
           this.xrData.controllerA.setIndices(Module.ControllersArrayOffset);
-          this.xrData.controllerB.setIndices(Module.ControllersArrayOffset + 28);
+          this.xrData.controllerB.setIndices(Module.ControllersArrayOffset + 34);
           this.xrData.handLeft.setIndices(Module.HandsArrayOffset);
-          this.xrData.handRight.setIndices(Module.HandsArrayOffset + 205);
+          this.xrData.handRight.setIndices(Module.HandsArrayOffset + 212);
           this.xrData.viewerHitTestPose.setIndices(Module.ViewerHitTestPoseArrayOffset);
           this.xrData.controllerA.updatedProfiles = 0;
           this.xrData.controllerB.updatedProfiles = 0;
@@ -861,7 +936,9 @@ setTimeout(function () {
           var tempRaf = function (time, xrFrame) {
             if (thisXRMananger.animate(xrFrame))
             {
-              thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+              if (thisXRMananger.BrowserObject.resumeAsyncCallbacks) {
+                thisXRMananger.BrowserObject.resumeAsyncCallbacks();
+              }
               thisXRMananger.BrowserObject.mainLoop.resume();
             } else {
               // No XR session yet
@@ -886,7 +963,8 @@ setTimeout(function () {
           this.canvas.width = glLayer.framebufferWidth;
           this.canvas.height = glLayer.framebufferHeight;
         }
-        
+
+        Module.WebXR.isSpectatorCameraRendering = false;
         this.ctx.bindFramebuffer(this.ctx.FRAMEBUFFER, glLayer.framebuffer);
         if (session.isAR) {
           // Workaround for Chromium depth bug https://bugs.chromium.org/p/chromium/issues/detail?id=1167450#c21
@@ -960,8 +1038,8 @@ setTimeout(function () {
         if (xrData.controllerA.updatedProfiles == 1 || xrData.controllerB.updatedProfiles == 1)
         {
           var inputProfiles = {};
-          inputProfiles.conrtoller1 = xrData.controllerA.profiles;
-          inputProfiles.conrtoller2 = xrData.controllerB.profiles;
+          inputProfiles.controller1 = xrData.controllerA.profiles;
+          inputProfiles.controller2 = xrData.controllerB.profiles;
           if (xrData.controllerA.updatedProfiles == 1)
           {
             xrData.controllerA.updatedProfiles = 2;
@@ -998,7 +1076,7 @@ setTimeout(function () {
                 leftRect.w = (viewport.width / glLayer.framebufferWidth) * (glLayer.framebufferWidth / this.canvas.width);
                 leftRect.h = (viewport.height / glLayer.framebufferHeight) * (glLayer.framebufferHeight / this.canvas.height);
               }
-            } else if (view.eye === 'right' && viewport.width != 0 && viewport.height != 0) {
+            } else if (view.eye === 'right' && viewport.width != 0 && viewport.height != 0 && viewport.x != 0) { // Ugly hack for iOS Mozilla WebXR Viewer
               eyeCount = 2;
               if (viewport) {
                 rightRect.x = (viewport.x / glLayer.framebufferWidth) * (glLayer.framebufferWidth / this.canvas.width);
@@ -2395,7 +2473,7 @@ function _emscripten_asm_const_ii(code, a0) {
  return ASM_CONSTS[code](a0);
 }
 STATIC_BASE = GLOBAL_BASE;
-STATICTOP = STATIC_BASE + 2460944;
+STATICTOP = STATIC_BASE + 2466544;
 __ATINIT__.push({
  func: (function() {
   __GLOBAL__sub_I_AccessibilityScriptingClasses_cpp();
@@ -4381,7 +4459,7 @@ __ATINIT__.push({
   ___emscripten_environ_constructor();
  })
 });
-var STATIC_BUMP = 2460944;
+var STATIC_BUMP = 2466544;
 Module["STATIC_BASE"] = STATIC_BASE;
 Module["STATIC_BUMP"] = STATIC_BUMP;
 var tempDoublePtr = STATICTOP;
@@ -4735,6 +4813,157 @@ function _JS_SystemInfo_HasFullscreen() {
 function _JS_SystemInfo_HasWebGL() {
  return Module.SystemInfo.hasWebGL;
 }
+var webcam = {
+ canvas: null
+};
+function _JS_WebCamVideo_CanPlay(deviceId) {
+ return MediaDevices[deviceId].video && MediaDevices[deviceId].video.videoWidth > 0 && MediaDevices[deviceId].video.videoHeight > 0;
+}
+function _JS_WebCamVideo_GetDeviceName(deviceId, buffer, bufferSize) {
+ if (buffer) stringToUTF8(MediaDevices[deviceId].deviceName, buffer, bufferSize);
+ return lengthBytesUTF8(MediaDevices[deviceId].deviceName);
+}
+function _JS_WebCamVideo_GetNativeHeight(deviceId) {
+ return MediaDevices[deviceId].video ? MediaDevices[deviceId].video.videoHeight : 0;
+}
+function _JS_WebCamVideo_GetNativeWidth(deviceId) {
+ return MediaDevices[deviceId].video ? MediaDevices[deviceId].video.videoWidth : 0;
+}
+function _JS_WebCamVideo_GetNumDevices() {
+ return MediaDevices.length;
+}
+var webcamLatestTextureId = 0;
+var webcamBufferToTextureTable = {};
+function _JS_WebCamVideo_GrabFrame(deviceId, buffer, destWidth, destHeight) {
+ var videoElement;
+ if (typeof activeWebCams !== "undefined") {
+  var webcamDevice = activeWebCams[deviceId];
+  if (!webcamDevice) return;
+  var timeNow = performance.now();
+  if (timeNow < webcamDevice.nextFrameAvailableTime) {
+   return;
+  }
+  webcamDevice.nextFrameAvailableTime += webcamDevice.frameLengthInMsecs;
+  if (webcamDevice.nextFrameAvailableTime < timeNow) {
+   webcamDevice.nextFrameAvailableTime = timeNow + webcamDevice.frameLengthInMsecs;
+  }
+  videoElement = webcamDevice.video;
+ } else if (!typeof MediaDevices !== "undefined") {
+  if (!MediaDevices[deviceId].video) {
+   console.error("WebCam not initialized.");
+   return;
+  }
+  videoElement = MediaDevices[deviceId].video;
+ }
+ if (!webcamBufferToTextureTable[buffer]) {
+  if (!webcamLatestTextureId) {
+   return;
+  }
+  webcamBufferToTextureTable[buffer] = webcamLatestTextureId;
+  webcamLatestTextureId = 0;
+ }
+ GLctx.bindTexture(GLctx.TEXTURE_2D, GL.textures[webcamBufferToTextureTable[buffer]]);
+ GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, true);
+ GLctx.texImage2D(GLctx.TEXTURE_2D, 0, GLctx.RGBA, GLctx.RGBA, GLctx.UNSIGNED_BYTE, videoElement);
+ GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, false);
+ GLctx.disableNextSubImage = true;
+ if (!GLctx.webcamtexSubImage2D) {
+  GLctx.webcamtexSubImage2D = GLctx.texSubImage2D;
+  GLctx.texSubImage2D = (function() {
+   if (this.disableNextSubImage) {
+    this.disableNextSubImage = false;
+    return;
+   }
+   this.webcamtexSubImage2D.apply(this, arguments);
+  });
+ }
+ return 1;
+}
+function _JS_WebCamVideo_RemoveWhereTextureId(textureId) {
+ if (typeof _JS_WebCamVideo_Update !== "undefined") {
+  return;
+ }
+ Object.entries(webcamBufferToTextureTable).forEach((function(pair) {
+  if (pair[1] == textureId) {
+   delete webcamBufferToTextureTable[pair[0]];
+  }
+ }));
+}
+function _JS_WebCamVideo_SetLatestTextureId(textureId) {
+ if (typeof _JS_WebCamVideo_Update !== "undefined") {
+  return;
+ }
+ webcamLatestTextureId = textureId;
+ GLctx.deleteTexture(GL.textures[textureId]);
+ GL.textures[textureId] = GLctx.createTexture();
+ GL.textures[textureId].name = textureId;
+ GLctx.bindTexture(GLctx.TEXTURE_2D, GL.textures[textureId]);
+ GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_WRAP_S, GLctx.CLAMP_TO_EDGE);
+ GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_WRAP_T, GLctx.CLAMP_TO_EDGE);
+ GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_MIN_FILTER, GLctx.LINEAR);
+}
+function _JS_WebCamVideo_Start(deviceId) {
+ if (MediaDevices[deviceId].video) {
+  MediaDevices[deviceId].refCount++;
+  return;
+ }
+ if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  navigator.getMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+ } else {
+  navigator.getMedia = (function(constraints, success, error) {
+   navigator.mediaDevices.getUserMedia(constraints).then(success).catch(error);
+  });
+ }
+ if (!navigator.getMedia) {
+  console.log("WebCam is not supported. Try a different browser.");
+  return;
+ }
+ if (!webcam.canvas) {
+  canvas = document.createElement("canvas");
+  canvas.style.display = "none";
+  var context2d = canvas.getContext("2d");
+  if (!context2d) {
+   console.log("context2d is null");
+   return;
+  }
+  document.body.appendChild(canvas);
+  webcam.canvas = canvas;
+ }
+ var video = document.createElement("video");
+ navigator.getMedia({
+  video: true,
+  audio: false
+ }, (function(stream) {
+  video.srcObject = stream;
+  webcam.canvas.appendChild(video);
+  video.play();
+  MediaDevices[deviceId].video = video;
+  MediaDevices[deviceId].stream = stream;
+  MediaDevices[deviceId].refCount++;
+ }), (function(err) {
+  console.log("An error occurred! " + err);
+ }));
+}
+function _JS_WebCamVideo_Stop(deviceId) {
+ if (!MediaDevices[deviceId].video) {
+  console.error("WebCam not initialized.");
+  return;
+ }
+ if (--MediaDevices[deviceId].refCount == 0) {
+  webcam.canvas.removeChild(MediaDevices[deviceId].video);
+  MediaDevices[deviceId].video = null;
+  MediaDevices[deviceId].stream.getVideoTracks().forEach((function(track) {
+   if (track.stop) track.stop();
+  }));
+ }
+}
+function _JS_WebCam_IsSupported() {
+ var getMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+ return getMedia != null;
+}
+function _PreRenderSpectatorCamera() {
+ Module.WebXR.startRenderSpectatorCamera();
+}
 function _SetWebXREvents(onStartARPtr, onStartVRPtr, onVisibilityChangePtr, onEndXRPtr, onXRCapabilitiesPtr, onInputProfilesPtr) {
  Module.WebXR.onStartARPtr = onStartARPtr;
  Module.WebXR.onStartVRPtr = onStartVRPtr;
@@ -4744,7 +4973,7 @@ function _SetWebXREvents(onStartARPtr, onStartVRPtr, onVisibilityChangePtr, onEn
  Module.WebXR.onInputProfilesPtr = onInputProfilesPtr;
 }
 function _SetWebXRSettings(strJson) {
- Module.WebXR.Settings = JSON.parse(Pointer_stringify(strJson));
+ Module.WebXR.Settings = JSON.parse(UTF8ToString(strJson));
  console.log(Module.WebXR.Settings);
 }
 function _ToggleAR() {
@@ -12805,10 +13034,10 @@ function _glBufferSubData(target, offset, size, data) {
 function _glCheckFramebufferStatus(x0) {
  return GLctx["checkFramebufferStatus"](x0);
 }
+var colorMaskValue = [ true, true, true, true ];
 function _glClear(mask) {
  if (mask == 16384 && GLctx.dontClearAlphaOnly) {
-  var v = GLctx.getParameter(GLctx.COLOR_WRITEMASK);
-  if (!v[0] && !v[1] && !v[2] && v[3]) return;
+  if (!colorMaskValue[0] && !colorMaskValue[1] && !colorMaskValue[2] && colorMaskValue[3]) return;
  }
  GLctx.clear(mask);
 }
@@ -12837,7 +13066,11 @@ function _glClientWaitSync(sync, flags, timeoutLo, timeoutHi) {
  return GLctx.clientWaitSync(GL.syncs[sync], flags, timeout);
 }
 function _glColorMask(red, green, blue, alpha) {
- GLctx.colorMask(!!red, !!green, !!blue, !!alpha);
+ colorMaskValue[0] = !!red;
+ colorMaskValue[1] = !!green;
+ colorMaskValue[2] = !!blue;
+ colorMaskValue[3] = !!alpha;
+ GLctx.colorMask(colorMaskValue[0], colorMaskValue[1], colorMaskValue[2], colorMaskValue[3]);
 }
 function _glCompileShader(shader) {
  GLctx.compileShader(GL.shaders[shader]);
@@ -19234,6 +19467,18 @@ Module.asmLibraryArg = {
  "_JS_SystemInfo_HasCursorLock": _JS_SystemInfo_HasCursorLock,
  "_JS_SystemInfo_HasFullscreen": _JS_SystemInfo_HasFullscreen,
  "_JS_SystemInfo_HasWebGL": _JS_SystemInfo_HasWebGL,
+ "_JS_WebCamVideo_CanPlay": _JS_WebCamVideo_CanPlay,
+ "_JS_WebCamVideo_GetDeviceName": _JS_WebCamVideo_GetDeviceName,
+ "_JS_WebCamVideo_GetNativeHeight": _JS_WebCamVideo_GetNativeHeight,
+ "_JS_WebCamVideo_GetNativeWidth": _JS_WebCamVideo_GetNativeWidth,
+ "_JS_WebCamVideo_GetNumDevices": _JS_WebCamVideo_GetNumDevices,
+ "_JS_WebCamVideo_GrabFrame": _JS_WebCamVideo_GrabFrame,
+ "_JS_WebCamVideo_RemoveWhereTextureId": _JS_WebCamVideo_RemoveWhereTextureId,
+ "_JS_WebCamVideo_SetLatestTextureId": _JS_WebCamVideo_SetLatestTextureId,
+ "_JS_WebCamVideo_Start": _JS_WebCamVideo_Start,
+ "_JS_WebCamVideo_Stop": _JS_WebCamVideo_Stop,
+ "_JS_WebCam_IsSupported": _JS_WebCam_IsSupported,
+ "_PreRenderSpectatorCamera": _PreRenderSpectatorCamera,
  "_SetWebXREvents": _SetWebXREvents,
  "_SetWebXRSettings": _SetWebXRSettings,
  "_ToggleAR": _ToggleAR,
